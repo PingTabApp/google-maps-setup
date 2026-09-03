@@ -54,12 +54,17 @@ no billing account attached, so check first:
 gcloud beta billing projects describe "$GOOGLE_CLOUD_PROJECT" --format='value(billingEnabled)'
 ```
 
-This must print `True`.
+If it prints `True`, carry on.
 
-If it prints `False` (or the command errors), open
+If it prints `False`, open
 [Billing](https://console.cloud.google.com/billing/linkedaccount) in the Cloud Console,
 link a billing account to this project, then run the command again. Google offers
 recurring free Maps usage each month, but the billing account still has to exist.
+
+If the command **errors instead of printing anything**, that is usually a permission
+you do not have on the billing account rather than a project without billing. Carry on:
+the setup script warns about it and keeps going. If the project really has no billing
+account, the next step fails when it tries to switch the Maps APIs on, and says so.
 
 ## Enable the Maps APIs
 
@@ -82,9 +87,15 @@ is safe to run again if the APIs are already on.
 
 ## Copy the restrictions from PingTab
 
-The PingTab setup screen shows two values. Paste them into the command below, replacing
-`PASTE_IPS_HERE` and `PASTE_REFERRERS_HERE`. Use comma-separated lists if PingTab shows
-more than one of either.
+The PingTab setup screen shows the values to lock the keys to. Paste them into the
+command below, replacing `PASTE_IPS_HERE` and `PASTE_REFERRERS_HERE`. Use
+comma-separated lists if PingTab shows more than one of either.
+
+**PingTab may show only the website addresses.** The backend IP addresses are shown
+only on deployments that publish them, and without them there is nothing to restrict a
+server key to. In that case skip `PINGTAB_ALLOWED_IPS` entirely and follow the
+browser-key-only command in the next step: you get the website key, and routes and
+arrival times stay on PingTab's key.
 
 ```bash
 export PINGTAB_ALLOWED_IPS="PASTE_IPS_HERE"
@@ -105,6 +116,13 @@ own website. Neither is useful to anyone who copies it.
 ./setup.sh \
   --allowed-ips "$PINGTAB_ALLOWED_IPS" \
   --allowed-referrers "$PINGTAB_ALLOWED_REFERRERS"
+```
+
+If PingTab showed no backend IP addresses, run this instead. It creates the browser key
+alone and enables only the APIs that key needs:
+
+```bash
+./setup.sh --allowed-referrers "$PINGTAB_ALLOWED_REFERRERS"
 ```
 
 The script will:
@@ -129,9 +147,15 @@ names on the PingTab setup screen:
 | Server key | **Backend API key** |
 | Browser key | **Website API key** |
 
-PingTab will make one test call against each key to confirm it works and is correctly
-restricted before it starts using them. If validation fails, PingTab keeps using its
-shared key and tells you what went wrong.
+PingTab checks the **server key** against Google as you save it, and refuses it with
+Google's own message if the Routes API is off or the IP restriction does not cover
+PingTab's servers.
+
+The **browser key** cannot be checked that way: a correctly referrer-restricted key is
+meant to fail when a server calls it. So PingTab saves it and gives you a **Test this
+key** button beside the field, which loads a map from the page itself. Use it. If a
+saved browser key turns out to be wrong, maps quietly fall back to PingTab's key and
+the settings screen tells you Google refused yours.
 
 To print the keys again later:
 

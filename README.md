@@ -81,8 +81,18 @@ gcloud config set project YOUR_PROJECT_ID
 no billing account attached, `setup.sh` stops early and links them to the Cloud Console
 to fix it. Everything downstream of that is automated.
 
-It also does not verify the keys — PingTab does that itself, with one test call per key
-before it accepts them and stops using the shared one.
+The precheck only stops on an explicit `False`. Reading billing status needs
+`roles/billing.viewer` on the *billing account*, which plenty of people who can
+otherwise create keys in a project do not have, so an unreadable status warns and
+carries on: it means a permission we lack far more often than a billing account the
+customer lacks, and blocking on it would wall off a project that was configured fine.
+
+It also does not verify the keys. PingTab verifies the **server** key itself, with one
+Routes call as the operator saves it, and refuses it with Google's own message. The
+**browser** key cannot be verified from a server at all: a correctly referrer-restricted
+key is supposed to fail there. PingTab stores it and offers a button that tests it from
+the settings page, where the referrer is real, and falls back to the shared key at call
+time if Google later refuses it.
 
 ## Editing the tutorial
 
@@ -104,6 +114,8 @@ The person running the walkthrough needs, on the target project:
 
 - `roles/serviceusage.serviceUsageAdmin` — to enable the APIs
 - `roles/serviceusage.apiKeysAdmin` — to create the key and read its key string
-- `roles/billing.viewer` on the billing account — for the billing precheck
+- `roles/billing.viewer` on the billing account, for the billing precheck only. Optional:
+  without it the precheck warns and carries on, and a project that truly has no billing
+  account stops at the API-enable step instead, which says so
 
 Project Owner or Editor covers all three.

@@ -28,6 +28,7 @@ PROJECT="${GOOGLE_CLOUD_PROJECT:-}"
 die()  { printf '\n\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
 ok()   { printf '\033[32m  ✓\033[0m %s\n' "$1"; }
+warn() { printf '\033[33m  !\033[0m %s\n' "$1" >&2; }
 
 usage() {
   cat <<USAGE
@@ -81,15 +82,26 @@ info "Project: ${PROJECT}"
 
 # ------------------------------------------------------------------ billing ---
 
+# Reading this needs roles/billing.viewer on the *billing account*, which plenty
+# of people who can otherwise create keys in a project do not have. So only an
+# explicit "False" stops the run: an unreadable status is a permission we lack,
+# not a billing account the customer lacks, and blocking on it would turn a
+# helpful precheck into a wall in front of a project that was configured fine.
 info "Checking that billing is enabled..."
-BILLING="$(gcloud beta billing projects describe "$PROJECT" \
-             --format='value(billingEnabled)' 2>/dev/null || echo "unknown")"
+BILLING="unknown"
+if BILLING_STATUS="$(gcloud beta billing projects describe "$PROJECT" \
+                       --format='value(billingEnabled)' 2>/dev/null)"; then
+  BILLING="${BILLING_STATUS:-unknown}"
+fi
 
-if [[ "$BILLING" != "True" ]]; then
-  cat >&2 <<BILLINGMSG
+case "$BILLING" in
+  True)
+    ok "Billing is enabled."
+    ;;
+  False)
+    cat >&2 <<BILLINGMSG
 
-Billing is not enabled on project ${PROJECT} (or your account cannot read its
-billing status).
+Billing is not enabled on project ${PROJECT}.
 
 The Maps APIs reject every request without a billing account attached, and no
 script can create one for you. Link a billing account here, then re-run:
@@ -97,9 +109,15 @@ script can create one for you. Link a billing account here, then re-run:
   https://console.cloud.google.com/billing/linkedaccount?project=${PROJECT}
 
 BILLINGMSG
-  die "Billing not enabled."
-fi
-ok "Billing is enabled."
+    die "Billing not enabled."
+    ;;
+  *)
+    warn "Could not read the billing status of ${PROJECT} -- carrying on anyway."
+    warn "This usually means you lack roles/billing.viewer on the billing"
+    warn "account, not that billing is off. If the project really has no billing"
+    warn "account, enabling the APIs in the next step fails and says so."
+    ;;
+esac
 
 # -------------------------------------------------------------------- APIs ---
 
@@ -107,8 +125,28 @@ SERVICES=(apikeys.googleapis.com)
 [[ -n "$ALLOWED_IPS" ]]       && SERVICES+=("${SERVER_APIS[@]}")
 [[ -n "$ALLOWED_REFERRERS" ]] && SERVICES+=("${BROWSER_APIS[@]}")
 
+# This is where a project with no billing account actually stops: Google refuses
+# to activate the Maps services without one, in a message that never says the
+# word "billing" near the top. Catching it here is what lets the precheck above
+# be permissive -- the wall is at this line, and at this line we can name it.
 info "Enabling required APIs (safe to repeat)..."
-gcloud services enable "${SERVICES[@]}" --project="$PROJECT"
+if ! gcloud services enable "${SERVICES[@]}" --project="$PROJECT"; then
+  cat >&2 <<ENABLEMSG
+
+Could not enable the Maps APIs on project ${PROJECT}.
+
+The usual cause is a project with no billing account attached. Google will not
+activate these services without one, and no script can create one for you. Link
+a billing account here, then run this again:
+
+  https://console.cloud.google.com/billing/linkedaccount?project=${PROJECT}
+
+If billing is already linked, the error printed above is the real reason. The
+most common one is missing roles/serviceusage.serviceUsageAdmin on the project.
+
+ENABLEMSG
+  die "Could not enable the APIs."
+fi
 for s in "${SERVICES[@]}"; do ok "$s"; done
 
 # -------------------------------------------------------------------- keys ---
