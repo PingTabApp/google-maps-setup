@@ -8,15 +8,15 @@ By default those calls run on PingTab's shared key. This walkthrough creates key
 quota is yours alone.
 
 You will end up with **two** keys, because a Google API key can carry only one kind of
-restriction — a single key cannot safely serve both a server and a browser:
+restriction. A single key cannot safely serve both a server and a browser:
 
 | Key | Locked to | Used for |
 | --- | --- | --- |
-| **Server** | PingTab's backend IP addresses | Routes API — ETAs and planned routes |
+| **Server** | PingTab's backend IP addresses | Routes API (ETAs and planned routes) |
 | **Browser** | your website's addresses | Maps JavaScript, Maps Static, Places (New) |
 
 Everything below runs as **you**, in **your** project. PingTab never sees your Google
-credentials — at the end you copy two key strings back into PingTab.
+credentials. At the end you copy two key strings back into PingTab.
 
 **What you need before starting:**
 
@@ -35,15 +35,30 @@ project, create one here too.
 
 <walkthrough-project-setup></walkthrough-project-setup>
 
-Confirm Cloud Shell picked it up:
+Now put that choice into this terminal. Run this whether or not you used the picker:
 
 ```bash
+PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
+if [ "$PROJECT" = "(unset)" ]; then PROJECT=""; fi
+export GOOGLE_CLOUD_PROJECT="${PROJECT:-${GOOGLE_CLOUD_PROJECT:-}}"
 echo "Project: ${GOOGLE_CLOUD_PROJECT:-<none selected>}"
 ```
 
-If that prints `<none selected>`, use the project picker above before continuing.
+**The picker does not change a terminal that is already open.** Cloud Shell sets
+`GOOGLE_CLOUD_PROJECT` when a shell starts, and the picker writes your choice to the
+gcloud config instead, so a tab opened first keeps an empty value and commands using it
+fail with `could not parse resource []`. The command above reads the config, which is
+always current.
 
-<walkthrough-footnote>Cloud Shell sets GOOGLE_CLOUD_PROJECT automatically once a project is selected.</walkthrough-footnote>
+If it still prints `<none selected>`, the picker did not apply. Set the project by hand:
+
+```bash
+gcloud projects list
+gcloud config set project YOUR_PROJECT_ID
+export GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID
+```
+
+<walkthrough-footnote>Run every later step in this same terminal, or repeat the export above in a new one.</walkthrough-footnote>
 
 ## Check that billing is enabled
 
@@ -51,7 +66,9 @@ The Maps APIs are paid APIs. Requests fail with `PERMISSION_DENIED` if the proje
 no billing account attached, so check first:
 
 ```bash
-gcloud beta billing projects describe "$GOOGLE_CLOUD_PROJECT" --format='value(billingEnabled)'
+gcloud beta billing projects describe \
+  "${GOOGLE_CLOUD_PROJECT:-$(gcloud config get-value project)}" \
+  --format='value(billingEnabled)'
 ```
 
 If it prints `True`, carry on.
@@ -82,7 +99,7 @@ gcloud services enable \
 ```
 
 `maps-backend` is the Maps JavaScript API and `static-maps-backend` is the Maps Static
-API — those are the service names Google uses internally. This takes a few seconds and
+API. Those are the service names Google uses internally. This takes a few seconds and
 is safe to run again if the APIs are already on.
 
 ## Copy the restrictions from PingTab
@@ -135,7 +152,7 @@ The script will:
 4. Print both key strings.
 
 If either key already exists, the script updates its restrictions instead of creating a
-duplicate — so it is safe to run twice.
+duplicate, so it is safe to run twice.
 
 ## Copy the keys into PingTab
 
