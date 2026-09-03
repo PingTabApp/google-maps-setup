@@ -126,8 +126,9 @@ echo "Website     : ${PINGTAB_ALLOWED_REFERRERS:-(none, the browser key will be 
 ```
 
 This is what makes the keys safe to hand over. The server key will only work when
-called from PingTab's backend; the browser key will only work on pages served from your
-own website. Neither is useful to anyone who copies it.
+called from PingTab's backend. The browser key will only work on the addresses PingTab
+listed for you, which are your own booking site plus the PingTab pages that draw maps
+for you and for your guests. Neither key is useful to anyone who copies it.
 
 <walkthrough-footnote>Do not skip this. An unrestricted Maps key that leaks can be used by anyone, billed to you.</walkthrough-footnote>
 
