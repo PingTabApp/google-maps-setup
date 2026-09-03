@@ -85,9 +85,15 @@ account, the next step fails when it tries to switch the Maps APIs on, and says 
 
 ## Enable the Maps APIs
 
-<walkthrough-enable-apis apis="routes.googleapis.com,maps-backend.googleapis.com,static-maps-backend.googleapis.com,places.googleapis.com"></walkthrough-enable-apis>
+`setup.sh` enables these itself in a moment, so this step is optional. It is worth doing
+now anyway: if the project has no billing account, or you lack the permission to switch
+services on, that shows up here, before any keys exist.
 
-Or from the terminal:
+Click the button below. It runs one command against the project you picked.
+
+<walkthrough-enable-apis apis="routes.googleapis.com,maps-backend.googleapis.com,static-maps-backend.googleapis.com,places.googleapis.com,apikeys.googleapis.com"></walkthrough-enable-apis>
+
+If no button appears, you are reading this outside Cloud Shell. Run the same thing:
 
 ```bash
 gcloud services enable \
@@ -95,7 +101,8 @@ gcloud services enable \
   maps-backend.googleapis.com \
   static-maps-backend.googleapis.com \
   places.googleapis.com \
-  apikeys.googleapis.com
+  apikeys.googleapis.com \
+  --project="$GOOGLE_CLOUD_PROJECT"
 ```
 
 `maps-backend` is the Maps JavaScript API and `static-maps-backend` is the Maps Static
