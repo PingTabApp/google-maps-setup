@@ -1,0 +1,93 @@
+# PingTab — Google Maps setup
+
+A [Google Cloud Shell](https://cloud.google.com/shell) walkthrough that lets a PingTab
+customer create their **own** Google Maps Routes API key, in their **own** Google Cloud
+project, billed to their **own** account — and hand just that key back to PingTab.
+
+Everything here runs as the customer, under their Google identity. PingTab never
+requests an OAuth scope, never holds a Google credential, and never touches their
+project. The only thing that crosses the boundary is one restricted key string, pasted
+by hand.
+
+## Contents
+
+| File | Purpose |
+| --- | --- |
+| `tutorial.md` | The walkthrough rendered in the Cloud Shell side panel |
+| `setup.sh` | Does the actual work; also runnable in any terminal with the Cloud SDK |
+
+## The link PingTab generates
+
+```
+https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://github.com/PingTabApp/google-maps-setup&cloudshell_git_branch=main&cloudshell_tutorial=tutorial.md&cloudshell_workspace=.&cloudshell_ephemeral=true
+```
+
+| Parameter | Why |
+| --- | --- |
+| `cloudshell_git_repo` | Repo to clone. **Must be public** — Cloud Shell clones it unauthenticated |
+| `cloudshell_git_branch=main` | Pins the branch, so work in progress never reaches customers |
+| `cloudshell_tutorial=tutorial.md` | File rendered as the step-by-step panel |
+| `cloudshell_workspace=.` | Opens at the repo root, so `./setup.sh` resolves |
+| `cloudshell_ephemeral=true` | No persistent home disk — nothing of the customer's is retained |
+
+The PingTab setup screen shows this link next to the backend egress IP addresses the
+customer needs to paste in. Those IPs are deliberately **not** committed here: they
+change when the backend moves, and a stale value baked into the tutorial would produce
+a key that silently fails.
+
+## What the customer ends up with
+
+A key that is restricted two ways:
+
+- **API restriction** — `routes.googleapis.com` only.
+- **Server restriction** — callable only from PingTab's backend IP addresses.
+
+So the key is inert anywhere else, including in the customer's own hands. `setup.sh` is
+idempotent: run it again and it updates the existing key's restrictions rather than
+creating duplicates.
+
+## Running it without Cloud Shell
+
+Some organizations disable Cloud Shell by policy. The same script works in any terminal
+with an authenticated [Cloud SDK](https://cloud.google.com/sdk/docs/install):
+
+```bash
+git clone https://github.com/PingTabApp/google-maps-setup.git
+cd google-maps-setup
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+./setup.sh --allowed-ips 203.0.113.10,203.0.113.11
+```
+
+## What this does not do
+
+**It cannot create a billing account.** No Google API can. If the customer's project has
+no billing account attached, `setup.sh` stops early and links them to the Cloud Console
+to fix it. Everything downstream of that is automated.
+
+It also does not verify the key — PingTab does that server-side with a single test call
+to the Routes API before it accepts the key and stops using the shared one.
+
+## Editing the tutorial
+
+`tutorial.md` uses Cloud Shell's walkthrough syntax on top of plain Markdown:
+
+- `#` is the title; each `##` becomes a numbered step in the panel.
+- Every ```` ```bash ```` block gets an automatic "copy to Cloud Shell" button.
+- `<walkthrough-project-setup>` renders the project picker and sets
+  `$GOOGLE_CLOUD_PROJECT`.
+- `<walkthrough-enable-apis apis="...">` renders a one-click API enable button.
+
+Customers get whatever is on `main` the moment they click the link, so treat pushes to
+`main` as a release. Preview a change before merging by pointing
+`cloudshell_git_branch` at your branch.
+
+## Required permissions
+
+The person running the walkthrough needs, on the target project:
+
+- `roles/serviceusage.serviceUsageAdmin` — to enable the APIs
+- `roles/serviceusage.apiKeysAdmin` — to create the key and read its key string
+- `roles/billing.viewer` on the billing account — for the billing precheck
+
+Project Owner or Editor covers all three.
