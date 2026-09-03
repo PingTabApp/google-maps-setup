@@ -111,21 +111,18 @@ is safe to run again if the APIs are already on.
 
 ## Copy the restrictions from PingTab
 
-The PingTab setup screen shows the values to lock the keys to. Paste them into the
-command below, replacing `PASTE_IPS_HERE` and `PASTE_REFERRERS_HERE`. Use
-comma-separated lists if PingTab shows more than one of either.
+The PingTab setup screen shows the values to lock the keys to. Paste each one between
+the quotes below, comma-separated if PingTab shows more than one.
 
-**PingTab may show only the website addresses.** The backend IP addresses are shown
-only on deployments that publish them, and without them there is nothing to restrict a
-server key to. In that case skip `PINGTAB_ALLOWED_IPS` entirely and follow the
-browser-key-only command in the next step: you get the website key, and routes and
-arrival times stay on PingTab's key.
+**Leave a line empty if PingTab shows nothing for it.** An empty value simply skips that
+key: no IP addresses means no server key, and routes and arrival times stay on PingTab's
+own. Only the website addresses are shown on every deployment.
 
 ```bash
-export PINGTAB_ALLOWED_IPS="PASTE_IPS_HERE"
-export PINGTAB_ALLOWED_REFERRERS="PASTE_REFERRERS_HERE"
-echo "Backend IPs : $PINGTAB_ALLOWED_IPS"
-echo "Website     : $PINGTAB_ALLOWED_REFERRERS"
+export PINGTAB_ALLOWED_IPS=""
+export PINGTAB_ALLOWED_REFERRERS=""
+echo "Backend IPs : ${PINGTAB_ALLOWED_IPS:-(none, the server key will be skipped)}"
+echo "Website     : ${PINGTAB_ALLOWED_REFERRERS:-(none, the browser key will be skipped)}"
 ```
 
 This is what makes the keys safe to hand over. The server key will only work when
@@ -142,21 +139,18 @@ own website. Neither is useful to anyone who copies it.
   --allowed-referrers "$PINGTAB_ALLOWED_REFERRERS"
 ```
 
-If PingTab showed no backend IP addresses, run this instead. It creates the browser key
-alone and enables only the APIs that key needs:
-
-```bash
-./setup.sh --allowed-referrers "$PINGTAB_ALLOWED_REFERRERS"
-```
+One command whichever values you have. An empty one is treated as "not given": the
+matching key is skipped, and only the APIs the other key needs get enabled. If both are
+empty the script stops and says so, because there would be nothing to create.
 
 The script will:
 
 1. Re-check that billing is enabled and the APIs are on.
 2. Create **PingTab Routes (server)**, restricted to the Routes API and to your
-   backend IP addresses.
+   backend IP addresses, if you gave any.
 3. Create **PingTab Web (browser)**, restricted to Maps JavaScript, Maps Static and
-   Places (New), and to your website addresses.
-4. Print both key strings.
+   Places (New), and to your website addresses, if you gave any.
+4. Print the key strings it made.
 
 If either key already exists, the script updates its restrictions instead of creating a
 duplicate, so it is safe to run twice.

@@ -171,7 +171,7 @@ provision_key() {
   key_name="$(find_key "$display_name")"
 
   if [[ -n "$key_name" ]]; then
-    info "\"${display_name}\" already exists — updating its restrictions."
+    info "\"${display_name}\" already exists, updating its restrictions."
     gcloud services api-keys update "$key_name" \
       --project="$PROJECT" "${target_args[@]}" "${restrict_flag}=${restrict_value}" >/dev/null
   else
