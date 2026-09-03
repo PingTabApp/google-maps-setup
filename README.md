@@ -1,12 +1,12 @@
 # PingTab — Google Maps setup
 
 A [Google Cloud Shell](https://cloud.google.com/shell) walkthrough that lets a PingTab
-customer create their **own** Google Maps Routes API key, in their **own** Google Cloud
-project, billed to their **own** account — and hand just that key back to PingTab.
+customer create their **own** Google Maps API keys, in their **own** Google Cloud
+project, billed to their **own** account — and hand just those keys back to PingTab.
 
 Everything here runs as the customer, under their Google identity. PingTab never
 requests an OAuth scope, never holds a Google credential, and never touches their
-project. The only thing that crosses the boundary is one restricted key string, pasted
+project. The only thing that crosses the boundary is two restricted key strings, pasted
 by hand.
 
 ## Contents
@@ -31,20 +31,34 @@ https://shell.cloud.google.com/cloudshell/editor?cloudshell_git_repo=https://git
 | `cloudshell_ephemeral=true` | No persistent home disk — nothing of the customer's is retained |
 
 The PingTab setup screen shows this link next to the backend egress IP addresses the
-customer needs to paste in. Those IPs are deliberately **not** committed here: they
-change when the backend moves, and a stale value baked into the tutorial would produce
-a key that silently fails.
+customer needs to paste in, alongside the website referrer patterns for the browser
+key. Neither is committed here: they change when the backend or the web domain moves,
+and a stale value baked into the tutorial would produce a key that silently fails.
 
 ## What the customer ends up with
 
-A key that is restricted two ways:
+**Two** keys, not one. A Google API key carries exactly one *application* restriction
+type — HTTP referrers, or IP addresses, or Android apps, or iOS bundles, never a
+combination. So a browser-facing key and a server-facing key can never be the same key,
+regardless of how the API restrictions are set.
 
-- **API restriction** — `routes.googleapis.com` only.
-- **Server restriction** — callable only from PingTab's backend IP addresses.
+| Key | Application restriction | API restriction |
+| --- | --- | --- |
+| `PingTab Routes (server)` | PingTab backend IPs | `routes.googleapis.com` |
+| `PingTab Web (browser)` | customer website referrers | `maps-backend.googleapis.com` (Maps JS), `static-maps-backend.googleapis.com` (Maps Static), `places.googleapis.com` (Places New) |
 
-So the key is inert anywhere else, including in the customer's own hands. `setup.sh` is
-idempotent: run it again and it updates the existing key's restrictions rather than
-creating duplicates.
+Note the service names: Maps JavaScript API is `maps-backend`, Maps Static API is
+`static-maps-backend`, and Places API (New) is `places.googleapis.com` — the legacy
+Places API is `places-backend.googleapis.com` and a different SKU.
+
+Both keys are inert anywhere else, including in the customer's own hands. `setup.sh` is
+idempotent: run it again and it updates the existing keys' restrictions rather than
+creating duplicates. Passing only one of `--allowed-ips` / `--allowed-referrers`
+provisions only that key, and enables only the APIs it needs.
+
+Android and iOS are deliberately **not** covered here. One binary ships to every
+customer, so a mobile key cannot be per-customer; mobile Maps usage stays on PingTab's
+own project.
 
 ## Running it without Cloud Shell
 
@@ -56,7 +70,9 @@ git clone https://github.com/PingTabApp/google-maps-setup.git
 cd google-maps-setup
 gcloud auth login
 gcloud config set project YOUR_PROJECT_ID
-./setup.sh --allowed-ips 203.0.113.10,203.0.113.11
+./setup.sh \
+  --allowed-ips 203.0.113.10,203.0.113.11 \
+  --allowed-referrers 'https://app.pingtab.com/*'
 ```
 
 ## What this does not do
@@ -65,8 +81,8 @@ gcloud config set project YOUR_PROJECT_ID
 no billing account attached, `setup.sh` stops early and links them to the Cloud Console
 to fix it. Everything downstream of that is automated.
 
-It also does not verify the key — PingTab does that server-side with a single test call
-to the Routes API before it accepts the key and stops using the shared one.
+It also does not verify the keys — PingTab does that itself, with one test call per key
+before it accepts them and stops using the shared one.
 
 ## Editing the tutorial
 

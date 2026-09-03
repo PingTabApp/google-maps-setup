@@ -1,27 +1,36 @@
 # Connect your own Google Maps billing to PingTab
 
-<walkthrough-tutorial-duration duration="6"></walkthrough-tutorial-duration>
+<walkthrough-tutorial-duration duration="8"></walkthrough-tutorial-duration>
 
-PingTab uses the **Google Routes API** to calculate trip ETAs and planned routes. By
-default those calls run on PingTab's shared key. This walkthrough creates a key in
+PingTab uses Google Maps for trip ETAs, route planning and the maps on your website.
+By default those calls run on PingTab's shared key. This walkthrough creates keys in
 **your own** Google Cloud project instead, so the Maps usage is billed to you and the
 quota is yours alone.
 
+You will end up with **two** keys, because a Google API key can carry only one kind of
+restriction — a single key cannot safely serve both a server and a browser:
+
+| Key | Locked to | Used for |
+| --- | --- | --- |
+| **Server** | PingTab's backend IP addresses | Routes API — ETAs and planned routes |
+| **Browser** | your website's addresses | Maps JavaScript, Maps Static, Places (New) |
+
 Everything below runs as **you**, in **your** project. PingTab never sees your Google
-credentials — at the end you copy one key string back into PingTab.
+credentials — at the end you copy two key strings back into PingTab.
 
 **What you need before starting:**
 
 - A Google Cloud project you can create API keys in (Owner, Editor, or API Keys Admin).
-- A **billing account linked to that project**. Google will not serve the Routes API
+- A **billing account linked to that project**. Google will not serve the Maps APIs
   without one, and no script can create a billing account for you.
-- The **allowed IP addresses** shown on the PingTab setup screen you came from.
+- The **IP addresses** and **website addresses** shown on the PingTab setup screen you
+  came from.
 
 Click **Start** to begin.
 
 ## Pick the project to use
 
-Choose the Google Cloud project the key should live in. If you want a brand new
+Choose the Google Cloud project the keys should live in. If you want a brand new
 project, create one here too.
 
 <walkthrough-project-setup></walkthrough-project-setup>
@@ -38,7 +47,7 @@ If that prints `<none selected>`, use the project picker above before continuing
 
 ## Check that billing is enabled
 
-The Routes API is a paid API. Requests fail with `PERMISSION_DENIED` if the project has
+The Maps APIs are paid APIs. Requests fail with `PERMISSION_DENIED` if the project has
 no billing account attached, so check first:
 
 ```bash
@@ -52,67 +61,88 @@ If it prints `False` (or the command errors), open
 link a billing account to this project, then run the command again. Google offers
 recurring free Maps usage each month, but the billing account still has to exist.
 
-## Enable the Routes API
+## Enable the Maps APIs
 
-<walkthrough-enable-apis apis="routes.googleapis.com"></walkthrough-enable-apis>
+<walkthrough-enable-apis apis="routes.googleapis.com,maps-backend.googleapis.com,static-maps-backend.googleapis.com,places.googleapis.com"></walkthrough-enable-apis>
 
 Or from the terminal:
 
 ```bash
-gcloud services enable routes.googleapis.com
+gcloud services enable \
+  routes.googleapis.com \
+  maps-backend.googleapis.com \
+  static-maps-backend.googleapis.com \
+  places.googleapis.com \
+  apikeys.googleapis.com
 ```
 
-This takes a few seconds. It is safe to run again if it is already enabled.
+`maps-backend` is the Maps JavaScript API and `static-maps-backend` is the Maps Static
+API — those are the service names Google uses internally. This takes a few seconds and
+is safe to run again if the APIs are already on.
 
-## Set the IP restriction
+## Copy the restrictions from PingTab
 
-Copy the allowed IP addresses from the PingTab setup screen and paste them into the
-command below, replacing `PASTE_IPS_HERE`. Use a comma-separated list if PingTab shows
-more than one.
+The PingTab setup screen shows two values. Paste them into the command below, replacing
+`PASTE_IPS_HERE` and `PASTE_REFERRERS_HERE`. Use comma-separated lists if PingTab shows
+more than one of either.
 
 ```bash
 export PINGTAB_ALLOWED_IPS="PASTE_IPS_HERE"
-echo "Restricting the key to: $PINGTAB_ALLOWED_IPS"
+export PINGTAB_ALLOWED_REFERRERS="PASTE_REFERRERS_HERE"
+echo "Backend IPs : $PINGTAB_ALLOWED_IPS"
+echo "Website     : $PINGTAB_ALLOWED_REFERRERS"
 ```
 
-This is what makes the key safe to hand over: it will only work when called from
-PingTab's backend, and is useless anywhere else.
+This is what makes the keys safe to hand over. The server key will only work when
+called from PingTab's backend; the browser key will only work on pages served from your
+own website. Neither is useful to anyone who copies it.
 
 <walkthrough-footnote>Do not skip this. An unrestricted Maps key that leaks can be used by anyone, billed to you.</walkthrough-footnote>
 
-## Create the API key
+## Create the keys
 
 ```bash
-./setup.sh --allowed-ips "$PINGTAB_ALLOWED_IPS"
+./setup.sh \
+  --allowed-ips "$PINGTAB_ALLOWED_IPS" \
+  --allowed-referrers "$PINGTAB_ALLOWED_REFERRERS"
 ```
 
 The script will:
 
-1. Re-check that billing is enabled and the Routes API is on.
-2. Create a key named **PingTab Routes (server)**, restricted to the Routes API only
-   and to the IP addresses you supplied.
-3. Print the key string.
+1. Re-check that billing is enabled and the APIs are on.
+2. Create **PingTab Routes (server)**, restricted to the Routes API and to your
+   backend IP addresses.
+3. Create **PingTab Web (browser)**, restricted to Maps JavaScript, Maps Static and
+   Places (New), and to your website addresses.
+4. Print both key strings.
 
-If a key with that name already exists, the script reuses it instead of creating a
+If either key already exists, the script updates its restrictions instead of creating a
 duplicate — so it is safe to run twice.
 
-## Copy the key into PingTab
+## Copy the keys into PingTab
 
-The script printed a line starting with `AIza...`. Copy that whole value and paste it
-into the **Google Maps API key** field on the PingTab setup screen, then save.
+The script printed two values, each starting `AIza...`. Copy each one into the field it
+names on the PingTab setup screen:
 
-PingTab will make one test call to the Routes API to confirm the key works and is
-correctly restricted before it starts using it. If validation fails, PingTab keeps
-using its shared key and tells you what went wrong.
+| Printed as | PingTab field |
+| --- | --- |
+| Server key | **Backend API key** |
+| Browser key | **Website API key** |
 
-To print the key again later:
+PingTab will make one test call against each key to confirm it works and is correctly
+restricted before it starts using them. If validation fails, PingTab keeps using its
+shared key and tells you what went wrong.
+
+To print the keys again later:
 
 ```bash
-gcloud services api-keys get-key-string \
-  "$(gcloud services api-keys list \
-       --filter='displayName="PingTab Routes (server)"' \
-       --format='value(name)' --limit=1)" \
-  --format='value(keyString)'
+for name in "PingTab Routes (server)" "PingTab Web (browser)"; do
+  echo "== $name"
+  gcloud services api-keys get-key-string \
+    "$(gcloud services api-keys list --filter="displayName=\"$name\"" \
+         --format='value(name)' --limit=1)" \
+    --format='value(keyString)'
+done
 ```
 
 ## Done
@@ -128,5 +158,5 @@ billing account.
   account so surprise usage is caught early.
 - Review usage any time under
   [Google Maps Platform → Metrics](https://console.cloud.google.com/google/maps-apis/metrics).
-- To stop using your own key, clear the field in PingTab and delete the key with
+- To stop using your own keys, clear the fields in PingTab and delete the keys with
   `gcloud services api-keys delete`.
