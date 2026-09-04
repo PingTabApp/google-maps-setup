@@ -16,9 +16,8 @@ Pick the project the keys should live in, or create a new one here.
 
 <walkthrough-project-setup></walkthrough-project-setup>
 
-A brand new project needs a billing account linked to it before Google will serve maps.
-You can do that on the
-[billing page](https://console.cloud.google.com/billing/linkedaccount).
+If you have no project yet, or your project has no billing account, the script offers to
+sort that out and asks you first. Nothing is created or billed without a yes from you.
 
 ## Paste the command from PingTab
 

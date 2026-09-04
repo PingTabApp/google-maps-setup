@@ -37,10 +37,51 @@ CODE=""
 API_BASE="https://api.pingtab.com"
 ORG_NAME=""
 
+PROJECT_IS_NEW=0
+BILLING_JUST_LINKED=0
+
+CONSOLE_NEW_PROJECT="https://console.cloud.google.com/projectcreate"
+
 die()  { printf '\n\033[31mError:\033[0m %s\n' "$1" >&2; exit 1; }
 info() { printf '\033[36m==>\033[0m %s\n' "$1"; }
 ok()   { printf '\033[32m  ✓\033[0m %s\n' "$1"; }
 warn() { printf '\033[33m  !\033[0m %s\n' "$1" >&2; }
+
+# ------------------------------------------------------------------ asking ---
+
+# Seconds to wait before the one enable retry. A constant on purpose: nothing in
+# the environment gets to change how this script behaves.
+RETRY_WAIT=10
+
+# A prompt is only offered when there is a real terminal to answer it. No
+# override: a script or a pipe must never be talked into answering yes.
+is_interactive() { [[ -t 0 ]]; }
+
+# ask_yes_no <question>: true only on an explicit yes. Everything else, a bare
+# Enter included, is No. These prompts spend the customer's money or create
+# things in their Google account, so the safe answer has to be the default one.
+ask_yes_no() {
+  local reply=""
+  printf '\n%s ' "$1"
+  read -r reply || reply=""
+  echo
+  [[ "$reply" == [Yy] || "$reply" == [Yy][Ee][Ss] ]]
+}
+
+# Google's project id rules: 6 to 30 characters, lowercase letters, digits and
+# hyphens, must start with a letter. The "pingtab-maps-" prefix satisfies the
+# first-character rule, so the suffix only has to stay inside the alphabet, and
+# hex from urandom does.
+new_project_id() {
+  local suffix=""
+  # The "|| suffix=''" matters: without it a failure here would abort the script
+  # under errexit instead of falling through to the RANDOM path below.
+  suffix="$(od -An -tx1 -N4 /dev/urandom 2>/dev/null | tr -dc 'a-f0-9' | cut -c1-6)" || suffix=""
+  if [[ "${#suffix}" -ne 6 ]]; then
+    suffix="$(printf '%02x%02x%02x' "$((RANDOM % 256))" "$((RANDOM % 256))" "$((RANDOM % 256))")"
+  fi
+  printf 'pingtab-maps-%s' "$suffix"
+}
 
 usage() {
   cat <<USAGE
@@ -258,22 +299,88 @@ fi
 
 if [[ -z "$PROJECT" || "$PROJECT" == "(unset)" ]]; then
   PROJECT=""
-  PROJECT_LIST="$(gcloud projects list --format='value(projectId)' 2>/dev/null || true)"
+  # "No projects" and "could not ask" look identical in the output of this
+  # command, and they need opposite responses: one is an offer to create a
+  # project, the other must never create anything. Keep the status separate.
+  PROJECT_LIST=""
+  PROJECT_LIST_RC=0
+  PROJECT_LIST="$(gcloud projects list --format='value(projectId)' 2>/dev/null)" || PROJECT_LIST_RC=$?
+  if [[ "$PROJECT_LIST_RC" != "0" ]]; then
+    die "Could not read your Google Cloud projects. Check you are signed in, then paste the command again."
+  fi
   PROJECT_COUNT="$(printf '%s' "$PROJECT_LIST" | grep -c . || true)"
 
   if [[ "$PROJECT_COUNT" == "1" ]]; then
     PROJECT="$(printf '%s' "$PROJECT_LIST" | head -n1)"
     info "Using your only Google Cloud project: ${PROJECT}"
   elif [[ "$PROJECT_COUNT" == "0" ]]; then
-    cat >&2 <<NOPROJECT
+    if ! is_interactive; then
+      # Piped or scripted: there is nobody to answer the question, so say what
+      # the offer would have been rather than silently skipping it.
+      cat >&2 <<NOPROJECTQUIET
 
-You do not have a Google Cloud project yet. Create one here, come back to this
-tab and paste the command again:
+You do not have a Google Cloud project yet.
 
-  https://console.cloud.google.com/projectcreate
+Run this again in a terminal and it will offer to make one for you. Or create
+one here, come back to this tab and paste the command again:
+
+  ${CONSOLE_NEW_PROJECT}
+
+NOPROJECTQUIET
+      die "No Google Cloud project to put the keys in."
+    fi
+
+    NEW_PROJECT_ID="$(new_project_id)"
+    if ! ask_yes_no "You have no Google Cloud project yet. Create one called ${NEW_PROJECT_ID} now? [y/N]"; then
+      cat >&2 <<NOPROJECT
+
+No problem. Create one here, come back to this tab and paste the command again:
+
+  ${CONSOLE_NEW_PROJECT}
 
 NOPROJECT
-    die "No Google Cloud project to put the keys in."
+      die "No Google Cloud project to put the keys in."
+    fi
+
+    info "Creating ${NEW_PROJECT_ID}..."
+    if ! gcloud projects create "$NEW_PROJECT_ID" --name="PingTab Maps" >/dev/null 2>&1; then
+      # Two common causes, neither fixable from here: a Workspace policy that
+      # requires every project to sit under a named folder or organization, and
+      # an account that has hit its project quota.
+      cat >&2 <<CREATEFAIL
+
+Google would not let this script create a project for you.
+
+That usually means your organization requires new projects to be made a certain
+way, or your account has as many projects as it is allowed. Create one here,
+come back to this tab and paste the command again:
+
+  ${CONSOLE_NEW_PROJECT}
+
+CREATEFAIL
+      die "Could not create a Google Cloud project."
+    fi
+
+    PROJECT="$NEW_PROJECT_ID"
+    PROJECT_IS_NEW=1
+    ok "Created ${PROJECT}."
+
+    # Write it to the gcloud config so the panel's project picker and any later
+    # run of this script agree with what we just made. If this fails the project
+    # exists but nothing else knows about it, so stop rather than carry on with
+    # a project the next run will not find.
+    if ! gcloud config set project "$PROJECT" >/dev/null 2>&1; then
+      cat >&2 <<SELECTFAIL
+
+Created ${PROJECT} but could not select it.
+
+Run this, then paste the command again:
+
+  gcloud config set project ${PROJECT}
+
+SELECTFAIL
+      die "Could not select the new project."
+    fi
   else
     cat >&2 <<MANYPROJECTS
 
@@ -305,20 +412,111 @@ if BILLING_STATUS="$(gcloud beta billing projects describe "$PROJECT" \
   BILLING="${BILLING_STATUS:-unknown}"
 fi
 
+billing_console_link() {
+  printf '  https://console.cloud.google.com/billing/linkedaccount?project=%s\n' "$PROJECT"
+}
+
+no_billing_message() {
+  cat >&2 <<BILLINGMSG
+
+Google needs a billing account on project ${PROJECT} before it will serve maps.
+No script can create a billing account for you. Add one here, then paste the
+command again:
+
+$(billing_console_link)
+
+BILLINGMSG
+}
+
+# Offers to attach one of the customer's existing billing accounts to $PROJECT.
+# Returns:
+#   0  a billing account is attached now, carry on
+#   1  not attached, and the caller should print its own message and stop
+#   2  not attached, already explained why, stop without repeating it
+#
+# Only open accounts are offered: a closed one links happily and then pays for
+# nothing. Linking needs roles/billing.user on the account, which is a separate
+# grant from anything on the project, so being able to see an account and being
+# able to spend on it are genuinely different and a failure here is routine.
+offer_billing_link() {
+  is_interactive || return 1
+
+  local list count
+  list="$(gcloud beta billing accounts list --filter='open=true' \
+            --format='value(name,displayName)' 2>/dev/null || true)"
+  count="$(printf '%s' "$list" | grep -c . || true)"
+  [[ "${count:-0}" -ge 1 ]] || return 1
+
+  local acct_name="" acct_display="" chosen="" line choice n
+  if [[ "$count" == "1" ]]; then
+    chosen="$(printf '%s' "$list" | head -n1)"
+    IFS=$'\t' read -r acct_name acct_display <<<"$chosen"
+    echo
+    echo "Project ${PROJECT} has no billing account, and you have one."
+  else
+    echo
+    echo "Project ${PROJECT} has no billing account. These are yours:"
+    echo
+    n=0
+    while IFS= read -r line; do
+      [[ -n "$line" ]] || continue
+      n=$((n + 1))
+      printf '  %d  %s\n' "$n" "$(printf '%s' "$line" | cut -f2-)"
+    done <<<"$list"
+    echo
+    printf 'Which one? Enter a number, or press Enter to stop. '
+    read -r choice || choice=""
+    echo
+    # Capped at three digits before the base-10 conversion, so a long paste
+    # cannot become a huge arithmetic expression, and "08" is eight rather than
+    # a bad octal literal.
+    [[ "$choice" =~ ^[0-9]{1,3}$ ]] || return 1
+    choice=$((10#$choice))
+    [[ "$choice" -ge 1 && "$choice" -le "$n" ]] || return 1
+    chosen="$(printf '%s' "$list" | sed -n "${choice}p")"
+    IFS=$'\t' read -r acct_name acct_display <<<"$chosen"
+  fi
+
+  # Picking a number off a list is navigation, not consent. Both paths end at
+  # the same explicit question, because both end in the customer's money.
+  ask_yes_no "Link ${PROJECT} to \"${acct_display}\" now? Google Maps usage from PingTab will then be billed to that account. [y/N]" \
+    || return 1
+
+  # The list gives the resource path, the link flag wants the bare id.
+  local acct_id="${acct_name#billingAccounts/}"
+  info "Linking ${PROJECT} to \"${acct_display}\"..."
+  if gcloud beta billing projects link "$PROJECT" \
+       --billing-account="$acct_id" >/dev/null 2>&1; then
+    ok "Linked. Google Maps usage will be billed to \"${acct_display}\"."
+    return 0
+  fi
+
+  cat >&2 <<LINKFAIL
+
+Google would not link "${acct_display}" to ${PROJECT}.
+
+Usually that means your Google account can see that billing account but is not
+allowed to spend on it. Ask whoever manages it to link the project, or do it
+here, then paste the command again:
+
+$(billing_console_link)
+
+LINKFAIL
+  return 2
+}
+
 case "$BILLING" in
   True)
     ok "Billing is switched on."
     ;;
   False)
-    cat >&2 <<BILLINGMSG
-
-Google needs a billing account on project ${PROJECT} before it will serve maps.
-No script can create one for you. Add one here, then paste the command again:
-
-  https://console.cloud.google.com/billing/linkedaccount?project=${PROJECT}
-
-BILLINGMSG
-    die "No billing account on this project."
+    LINK_RC=0
+    offer_billing_link || LINK_RC=$?
+    case "$LINK_RC" in
+      0) BILLING="True"; BILLING_JUST_LINKED=1 ;;
+      2) die "No billing account on this project." ;;
+      *) no_billing_message; die "No billing account on this project." ;;
+    esac
     ;;
   *)
     warn "Could not check the billing status. Carrying on."
@@ -331,26 +529,91 @@ SERVICES=(apikeys.googleapis.com)
 if [[ -n "$ALLOWED_IPS" ]];       then SERVICES+=("${SERVER_APIS[@]}"); fi
 if [[ -n "$ALLOWED_REFERRERS" ]]; then SERVICES+=("${BROWSER_APIS[@]}"); fi
 
+# Keeps Google's own words in ENABLE_STDERR. We never show them to the customer,
+# but they are the only reliable way to tell a missing billing account from a
+# missing permission, and those two need opposite responses.
+ENABLE_STDERR=""
+enable_services() {
+  local err_file rc=0
+  err_file="$(mktemp)"
+  gcloud services enable "${SERVICES[@]}" --project="$PROJECT" >/dev/null 2>"$err_file" || rc=$?
+  ENABLE_STDERR="$(cat "$err_file")"
+  rm -f "$err_file"
+  return "$rc"
+}
+
+# True only when Google's refusal actually names billing. Anything else, an
+# unreadable billing status included, must not lead to a link offer: relinking a
+# project that already has a billing account is not ours to do on a guess.
+enable_failed_on_billing() {
+  printf '%s' "$ENABLE_STDERR" | grep -qi 'billing'
+}
+
 # This is where a project with no billing account actually stops: Google refuses
 # to activate the Maps services without one, in a message that never says the
 # word "billing" near the top. Catching it here is what lets the precheck above
 # be permissive. The wall is at this line, and at this line we can name it.
 info "Switching on the Google Maps services (safe to repeat)..."
-if ! gcloud services enable "${SERVICES[@]}" --project="$PROJECT" 2>/dev/null; then
-  cat >&2 <<ENABLEMSG
+ENABLE_OK=0
+if enable_services; then ENABLE_OK=1; fi
+
+# A project created seconds ago, or a billing account attached seconds ago, has
+# not finished propagating inside Google, and until it does this call fails with
+# an error that looks exactly like a real misconfiguration. One retry costs ten
+# seconds and saves a support conversation.
+if [[ "$ENABLE_OK" == "0" && ( "$PROJECT_IS_NEW" == "1" || "$BILLING_JUST_LINKED" == "1" ) ]]; then
+  info "Google is still finishing that off. Waiting a few seconds, then trying once more..."
+  sleep "$RETRY_WAIT"
+  if enable_services; then ENABLE_OK=1; fi
+fi
+
+# Offer the link only where billing is genuinely the problem: the precheck read
+# an explicit False, or Google's refusal says the word itself. BILLING=="False"
+# cannot normally reach here, since that branch either linked or stopped, but it
+# is the condition we mean and it costs nothing to say so.
+if [[ "$ENABLE_OK" == "0" ]] && { [[ "$BILLING" == "False" ]] || enable_failed_on_billing; }; then
+  info "Google says this project has no billing account."
+  LINK_RC=0
+  offer_billing_link || LINK_RC=$?
+  if [[ "$LINK_RC" == "0" ]]; then
+    BILLING_JUST_LINKED=1
+    info "Trying the Google Maps services again..."
+    sleep "$RETRY_WAIT"
+    if enable_services; then ENABLE_OK=1; fi
+  elif [[ "$LINK_RC" == "2" ]]; then
+    die "Could not switch on the Google Maps services."
+  fi
+fi
+
+if [[ "$ENABLE_OK" == "0" ]]; then
+  if [[ "$BILLING" == "False" ]] || enable_failed_on_billing; then
+    cat >&2 <<ENABLEBILLING
 
 Could not switch on the Google Maps services for project ${PROJECT}.
 
-Almost always this means the project has no billing account. Google will not
-serve maps without one, and no script can create one for you. Add one here,
-then paste the command again:
+Google will not serve maps without a billing account on the project, and no
+script can create a billing account for you. Add one here, then paste the
+command again:
 
-  https://console.cloud.google.com/billing/linkedaccount?project=${PROJECT}
+$(billing_console_link)
 
-If billing is already set up, your Google account may not be allowed to change
-this project. Ask whoever owns it to run this, or to make you an Owner of it.
+ENABLEBILLING
+  else
+    # Deliberately says nothing about billing: we have no evidence for it, and
+    # sending someone to the billing page over a permissions problem wastes an
+    # afternoon.
+    cat >&2 <<ENABLEOTHER
 
-ENABLEMSG
+Could not switch on the Google Maps services for project ${PROJECT}.
+
+Ask whoever manages this Google Cloud project to run this setup, or to give you
+permission to switch on APIs and create API keys. You can see what the project
+has switched on here:
+
+  https://console.cloud.google.com/apis/dashboard?project=${PROJECT}
+
+ENABLEOTHER
+  fi
   die "Could not switch on the Google Maps services."
 fi
 ok "Google Maps services are on."
@@ -484,8 +747,8 @@ if [[ "$API_STATUS" != "200" ]]; then
 fi
 
 RESULT_OK=0
-SERVER_PRESENT=0
-BROWSER_PRESENT=0
+SERVER_CLEAR=0
+BROWSER_CLEAR=0
 
 eval "$(printf '%s' "$API_BODY" | python3 -c '
 import json, shlex, sys
@@ -497,30 +760,50 @@ if not isinstance(d, dict):
     print("RESULT_OK=0")
     sys.exit(0)
 
+
+def is_clear(part):
+    """A section we can honestly report on.
+
+    Strict on purpose. JSON has no schema here, so "saved": "yes" and
+    "saved": null are both truthy-ish shapes that would otherwise be read as an
+    outcome. Anything short of real booleans means we do not know what happened
+    to the key, and not knowing has to look like failure, not success.
+    """
+    if not isinstance(part, dict):
+        return False
+    if part.get("sent") is not True:
+        return False
+    if not isinstance(part.get("saved"), bool):
+        return False
+    reason = part.get("reason")
+    if reason is not None and not isinstance(reason, str):
+        return False
+    return True
+
+
 print("RESULT_OK=1")
 print("ORG_NAME=" + shlex.quote(str(d.get("organization_name") or "")))
 for which in ("server", "browser"):
     part = d.get(which)
     prefix = which.upper()
-    # PRESENT is the structural check: a section we can actually report on.
-    print("%s_PRESENT=%s" % (prefix, "1" if isinstance(part, dict) else "0"))
+    print("%s_CLEAR=%s" % (prefix, "1" if is_clear(part) else "0"))
     if not isinstance(part, dict):
         part = {}
-    print("%s_SENT=%s" % (prefix, "1" if part.get("sent") else "0"))
-    print("%s_SAVED=%s" % (prefix, "1" if part.get("saved") else "0"))
+    print("%s_SENT=%s" % (prefix, "1" if part.get("sent") is True else "0"))
+    print("%s_SAVED=%s" % (prefix, "1" if part.get("saved") is True else "0"))
     reason = part.get("reason")
-    print("%s_REASON=%s" % (prefix, shlex.quote(str(reason) if reason else "")))
+    print("%s_REASON=%s" % (prefix, shlex.quote(reason if isinstance(reason, str) else "")))
 ' 2>/dev/null || echo 'RESULT_OK=0')"
 
-# A 200 whose body we cannot read, or which says nothing about a key we sent, is
-# no better than a failed POST: we do not know whether the key landed. Treat it
-# the same way and print the keys. Code mode must never end without either a
-# per-key outcome or the keys on screen.
+# A 200 whose body we cannot read, or which does not report a proper outcome for
+# a key we sent, is no better than a failed POST: we do not know whether the key
+# landed. Treat it the same way and print the keys. Code mode must never end
+# without either a per-key outcome or the keys on screen.
 POST_UNCLEAR=0
 [[ "${RESULT_OK:-0}" == "1" ]] || POST_UNCLEAR=1
 if [[ "$POST_UNCLEAR" == "0" ]]; then
-  [[ -z "$SERVER_KEY"  || "${SERVER_PRESENT:-0}"  == "1" ]] || POST_UNCLEAR=1
-  [[ -z "$BROWSER_KEY" || "${BROWSER_PRESENT:-0}" == "1" ]] || POST_UNCLEAR=1
+  [[ -z "$SERVER_KEY"  || "${SERVER_CLEAR:-0}"  == "1" ]] || POST_UNCLEAR=1
+  [[ -z "$BROWSER_KEY" || "${BROWSER_CLEAR:-0}" == "1" ]] || POST_UNCLEAR=1
 fi
 
 if [[ "$POST_UNCLEAR" == "1" ]]; then

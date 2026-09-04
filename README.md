@@ -148,18 +148,71 @@ Android and iOS are deliberately **not** covered here. One binary ships to every
 customer, so a mobile key cannot be per-customer; mobile Maps usage stays on PingTab's
 own project.
 
+## The two prompts
+
+`setup.sh` asks the operator exactly two questions, and only when it hits the matching
+dead end. Both **default to No**: a bare Enter, an EOF, or anything that is not `y` /
+`yes` declines. Each one creates something in the customer's Google account or moves
+money, so consent has to be given rather than assumed, and a mistyped keypress must never
+be the thing that opens a billing account.
+
+Both are skipped entirely when stdin is not a terminal. `is_interactive` is exactly
+`[[ -t 0 ]]` and **has no override**: nothing in the environment can talk this script into
+believing a pipe is a person. A piped or scripted run prints what the offer would have
+been and stops, rather than hanging on a `read` nobody will answer. Tests drive the
+prompts through a real pseudo-terminal (`script -qfec`), which is the only honest way.
+
+| Prompt | Fires when | Runs |
+| --- | --- | --- |
+| Create a project called `pingtab-maps-XXXXXX`? | The account owns no projects **and** listing them succeeded | `gcloud projects create <id> --name="PingTab Maps"`, then `gcloud config set project <id>` |
+| Link project to `<billing account>`? | Billing read an explicit `False`, or the API enable failed **and Google's error names billing** | `gcloud beta billing accounts list --filter='open=true'`, then `gcloud beta billing projects link <project> --billing-account=<id>` |
+
+A failed `gcloud projects list` is not zero projects. It stops with "Could not read your
+Google Cloud projects. Check you are signed in", and never offers to create one: an
+account that cannot be listed is not an account we should be making things in.
+
+Likewise the link offer is gated on evidence, not on absence of evidence. An unreadable
+billing status plus any enable failure is **not** enough, because relinking a project that
+already has a billing account is not ours to do on a guess. `enable_services` captures the
+command's stderr into `ENABLE_STDERR` (never shown to the customer, it is gcloud jargon)
+and `enable_failed_on_billing` greps it for the word. Without that evidence the failure
+message says nothing about billing and points at the API dashboard instead, because
+sending someone to the billing page over a permissions problem wastes their afternoon.
+
+The project id is `pingtab-maps-` plus six hex characters from `/dev/urandom`, which
+satisfies Google's rule (6 to 30 characters, lowercase letters, digits and hyphens,
+starting with a letter). `gcloud config set project` is what keeps a re-run and the Cloud
+Shell project picker agreeing with what was just made, so its failure stops the run: the
+project exists but nothing else knows about it, and the operator is told the one command
+that fixes that.
+
+Only **open** billing accounts are offered: a closed one links happily and pays for
+nothing. One account is named in the question. Several are listed and numbered, and the
+number chosen is only navigation: the pick is followed by the same explicit
+"Link ... now?" question, so no single keystroke ever moves money. Linking needs
+`roles/billing.user` on the *account*, a separate grant from anything on the project, so a
+customer who can see an account but not spend on it is a normal case and gets a plain
+message pointing at the console.
+
+A brand new project and a freshly linked billing account both take a few seconds to
+propagate, and until they do `gcloud services enable` fails with an error indistinguishable
+from a real misconfiguration. After either event the script waits ten seconds and retries
+the enable **once** before treating it as a failure. The wait is a constant, not an
+environment variable: no knob in this script is settable by anything but its own author.
+
 ## What this does not do
 
-**It cannot create a billing account.** No Google API can. If the customer's project has
-no billing account attached, `setup.sh` stops early and links them to the Cloud Console
-to fix it.
+**It cannot create a billing account.** No Google API can, so the offer above can only
+attach an account the customer already has. If they have none, or decline, `setup.sh`
+stops and links them to the Cloud Console to create one, exactly as before.
 
 The precheck only stops on an explicit `False`. Reading billing status needs
 `roles/billing.viewer` on the *billing account*, which plenty of people who can otherwise
 create keys in a project do not have, so an unreadable status warns and carries on: it
 means a permission we lack far more often than a billing account the customer lacks, and
 blocking on it would wall off a project that was configured fine. A project that truly
-has no billing account stops at the API-enable step instead, which names billing.
+has no billing account fails at the API-enable step instead, and that is where the link
+offer gets made a second time for exactly this reason.
 
 It also does not verify the keys. The backend verifies the **server** key with one Routes
 call as it stores it, and reports Google's sanitised message back through the POST
@@ -186,3 +239,10 @@ The person running the walkthrough needs, on the target project:
   without it the precheck warns and carries on
 
 Project Owner or Editor covers all three.
+
+The two prompts need more than that, and neither is a project role:
+
+- `roles/resourcemanager.projectCreator` on the organization or folder, to accept the
+  create-a-project offer. Accounts outside a Workspace organization have it implicitly
+- `roles/billing.user` on the billing account, to accept the link offer. This is the one
+  customers most often lack, and declining or failing here is a supported path, not a bug
