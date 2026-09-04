@@ -57,6 +57,34 @@ RETRY_WAIT=10
 # override: a script or a pipe must never be talked into answering yes.
 is_interactive() { [[ -t 0 ]]; }
 
+# ---------------------------------------------------------------- dry run ---
+
+# Everything that changes the customer's Google project, or sends their keys
+# anywhere, goes through run_or_print. Reads are left alone: they are safe to
+# repeat and their answers are what make the walkthrough decide anything. The
+# single exception is get-key-string, a read that hands back a secret, which
+# dry run skips and says so rather than printing a key nobody asked for.
+#
+# One gate, so --dry-run cannot miss a call by omission. Adding a mutating
+# gcloud command without routing it through here is the bug to watch for.
+DRY_RUN=0
+
+quote_cmd() {
+  local a out=()
+  for a in "$@"; do out+=("$(printf '%q' "$a")"); done
+  printf '%s' "${out[*]}"
+}
+
+dry_note() { printf '\033[35m  [dry run]\033[0m %s\n' "$1"; }
+
+run_or_print() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry_note "$(quote_cmd "$@")"
+    return 0
+  fi
+  "$@" >/dev/null
+}
+
 # ask_yes_no <question>: true only on an explicit yes. Everything else, a bare
 # Enter included, is No. These prompts spend the customer's money or create
 # things in their Google account, so the safe answer has to be the default one.
@@ -102,6 +130,10 @@ Usage: ./setup.sh --code <XXXX-XXXX> [--api <URL>] [--project <PROJECT_ID>]
   --allowed-referrers  Manual mode. Creates the browser key, callable only from
                        these website addresses, and prints it.
 
+  --dry-run            Works with either mode. Runs every read for real, and
+                       prints every step that would change something instead of
+                       doing it. Nothing is created, changed or sent.
+
 Use --code, or the two manual options. Not both.
 USAGE
 }
@@ -121,6 +153,7 @@ while [[ $# -gt 0 ]]; do
     --allowed-referrers)  need_value --allowed-referrers "'https://app.pingtab.com/*'" $#
                           ALLOWED_REFERRERS="$2"; shift 2 ;;
     --project)            need_value --project my-project-id $#;     PROJECT="$2"; shift 2 ;;
+    --dry-run)            DRY_RUN=1; shift ;;
     -h|--help)            usage; exit 0 ;;
     *)                    usage; die "Do not know what \"$1\" means." ;;
   esac
@@ -343,7 +376,7 @@ NOPROJECT
     fi
 
     info "Creating ${NEW_PROJECT_ID}..."
-    if ! gcloud projects create "$NEW_PROJECT_ID" --name="PingTab Maps" >/dev/null 2>&1; then
+    if ! run_or_print gcloud projects create "$NEW_PROJECT_ID" --name="PingTab Maps" 2>/dev/null; then
       # Two common causes, neither fixable from here: a Workspace policy that
       # requires every project to sit under a named folder or organization, and
       # an account that has hit its project quota.
@@ -363,13 +396,17 @@ CREATEFAIL
 
     PROJECT="$NEW_PROJECT_ID"
     PROJECT_IS_NEW=1
-    ok "Created ${PROJECT}."
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry_note "Would have created ${PROJECT}. Carrying on as if it exists."
+    else
+      ok "Created ${PROJECT}."
+    fi
 
     # Write it to the gcloud config so the panel's project picker and any later
     # run of this script agree with what we just made. If this fails the project
     # exists but nothing else knows about it, so stop rather than carry on with
     # a project the next run will not find.
-    if ! gcloud config set project "$PROJECT" >/dev/null 2>&1; then
+    if ! run_or_print gcloud config set project "$PROJECT" 2>/dev/null; then
       cat >&2 <<SELECTFAIL
 
 Created ${PROJECT} but could not select it.
@@ -485,9 +522,11 @@ offer_billing_link() {
   # The list gives the resource path, the link flag wants the bare id.
   local acct_id="${acct_name#billingAccounts/}"
   info "Linking ${PROJECT} to \"${acct_display}\"..."
-  if gcloud beta billing projects link "$PROJECT" \
-       --billing-account="$acct_id" >/dev/null 2>&1; then
-    ok "Linked. Google Maps usage will be billed to \"${acct_display}\"."
+  if run_or_print gcloud beta billing projects link "$PROJECT" \
+       --billing-account="$acct_id" 2>/dev/null; then
+    if [[ "$DRY_RUN" == "0" ]]; then
+      ok "Linked. Google Maps usage will be billed to \"${acct_display}\"."
+    fi
     return 0
   fi
 
@@ -535,6 +574,11 @@ if [[ -n "$ALLOWED_REFERRERS" ]]; then SERVICES+=("${BROWSER_APIS[@]}"); fi
 ENABLE_STDERR=""
 enable_services() {
   local err_file rc=0
+  if [[ "$DRY_RUN" == "1" ]]; then
+    run_or_print gcloud services enable "${SERVICES[@]}" --project="$PROJECT"
+    ENABLE_STDERR=""
+    return 0
+  fi
   err_file="$(mktemp)"
   gcloud services enable "${SERVICES[@]}" --project="$PROJECT" >/dev/null 2>"$err_file" || rc=$?
   ENABLE_STDERR="$(cat "$err_file")"
@@ -616,7 +660,11 @@ ENABLEOTHER
   fi
   die "Could not switch on the Google Maps services."
 fi
-ok "Google Maps services are on."
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry_note "Would have switched on the Google Maps services."
+else
+  ok "Google Maps services are on."
+fi
 
 # -------------------------------------------------------------------- keys ---
 
@@ -641,15 +689,26 @@ provision_key() {
 
   if [[ -n "$key_name" ]]; then
     info "\"${display_name}\" is already there, updating it."
-    gcloud services api-keys update "$key_name" \
-      --project="$PROJECT" "${target_args[@]}" "${restrict_flag}=${restrict_value}" >/dev/null
+    run_or_print gcloud services api-keys update "$key_name" \
+      --project="$PROJECT" "${target_args[@]}" "${restrict_flag}=${restrict_value}"
   else
     info "Creating \"${display_name}\"..."
-    gcloud services api-keys create \
+    run_or_print gcloud services api-keys create \
       --project="$PROJECT" --display-name="$display_name" \
-      "${target_args[@]}" "${restrict_flag}=${restrict_value}" >/dev/null
-    key_name="$(find_key "$display_name")"
-    [[ -n "$key_name" ]] || die "Made \"${display_name}\" but could not find it again. Paste the command again."
+      "${target_args[@]}" "${restrict_flag}=${restrict_value}"
+    if [[ "$DRY_RUN" == "0" ]]; then
+      key_name="$(find_key "$display_name")"
+      [[ -n "$key_name" ]] || die "Made \"${display_name}\" but could not find it again. Paste the command again."
+    fi
+  fi
+
+  # get-key-string is a read, so dry run could technically make it. It is the
+  # one read that hands back a secret, and printing a live key during a
+  # rehearsal is exactly the accident this flag exists to avoid.
+  if [[ "$DRY_RUN" == "1" ]]; then
+    KEY_STRING_OUT="$DRY_KEY_PLACEHOLDER"
+    dry_note "Skipping the read of the key itself. That would print a real secret."
+    return 0
   fi
 
   KEY_STRING_OUT="$(gcloud services api-keys get-key-string "$key_name" \
@@ -661,6 +720,7 @@ provision_key() {
 
 SERVER_KEY=""
 BROWSER_KEY=""
+DRY_KEY_PLACEHOLDER="<key not read>"
 
 if [[ -n "$ALLOWED_IPS" ]]; then
   provision_key "$SERVER_NAME" --allowed-ips "$ALLOWED_IPS" "${SERVER_APIS[@]}"
@@ -703,12 +763,38 @@ print_keys_for_manual_paste() {
   echo
 }
 
+dry_run_summary() {
+  echo
+  echo "────────────────────────────────────────────────────────────────────────────"
+  echo "  Dry run: nothing was created, changed, or sent."
+  echo "────────────────────────────────────────────────────────────────────────────"
+  echo
+}
+
 if [[ -z "$CODE" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry_run_summary
+    exit 0
+  fi
   print_keys_for_manual_paste
   exit 0
 fi
 
 # ------------------------------------------------------- code mode: send ---
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  # Shows the shape of the request without ever holding a key to put in it.
+  DRY_BODY=""
+  if [[ -n "$ALLOWED_IPS" ]];       then DRY_BODY+='"server_key": "<server key>", '; fi
+  if [[ -n "$ALLOWED_REFERRERS" ]]; then DRY_BODY+='"browser_key": "<browser key>", '; fi
+  DRY_BODY+="\"project_id\": \"${PROJECT}\""
+
+  info "Sending the keys to PingTab..."
+  dry_note "POST ${API_BASE}/api/maps-setup/${CODE_URL}/keys"
+  dry_note "{${DRY_BODY}}"
+  dry_run_summary
+  exit 0
+fi
 
 info "Sending the keys to PingTab..."
 

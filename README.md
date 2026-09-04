@@ -14,6 +14,14 @@ project, billed to their **own** account, and hand just those keys back to PingT
 | --- | --- |
 | `tutorial.md` | The walkthrough rendered in the Cloud Shell side panel |
 | `setup.sh` | Does the actual work; also runnable in any terminal with the Cloud SDK |
+| `test/` | Runs `setup.sh` against a fake gcloud and a fake API. See [`test/README.md`](test/README.md) |
+
+```bash
+./test/run.sh
+```
+
+No Google account needed, about 35 seconds, 57 cases. Run it before pushing: a push to
+`main` here is a release.
 
 ## The flow
 
@@ -81,6 +89,43 @@ not come back with a per-key outcome we can read. The keys exist in the customer
 by then, so a network failure, a non-200, an unparseable 200, and a 200 that says nothing
 about a key we sent all fall back to the manual paste block. Code mode must never end
 without either a parsed outcome or the keys on screen.
+
+## Dry run
+
+`--dry-run` works with either mode and is the safe way to see what a real account would
+get before touching it:
+
+```bash
+./setup.sh --code 7F3K-92QX --dry-run
+```
+
+Every **read** runs for real, because the reads are what the script decides on: the project
+picker's choice, the project list, billing status, the billing accounts, whether the keys
+already exist. Every **write** is printed as the exact command it would have run, prefixed
+`[dry run]`, and not executed: `projects create`, `config set project`, `billing projects
+link`, `services enable`, `api-keys create` and `update`, and the POST back to PingTab,
+whose URL and body shape are printed with the key values replaced by `<server key>` and
+`<browser key>`.
+
+Two deliberate exceptions:
+
+- **The GET of the config by code runs for real.** Reading does not consume the code, and
+  without it a dry run could not show which restrictions the keys would carry.
+- **`get-key-string` is skipped**, though it is technically a read. It is the one read that
+  hands back a secret, and printing a live key during a rehearsal is exactly the accident
+  this flag exists to prevent. It says so where it would have run.
+
+Prompts still ask, so the questions a customer would face are visible, but a yes only
+prints the command. A dry run that gets to the end says "Dry run: nothing was created,
+changed, or sent." and exits 0. It stops early, with exit 1, for the same reasons a real
+run would: a code the API does not know, a declined prompt, no project and no terminal
+to ask in.
+
+Every mutating call goes through one `run_or_print` helper. **A new mutating gcloud
+command that does not go through it is a silent dry-run bug**, so route it there and add a
+case to `test/run.sh` asserting zero calls of that kind.
+
+The tutorial does not mention this flag. It exists for engineers and for support.
 
 ## Manual mode
 
@@ -199,6 +244,11 @@ propagate, and until they do `gcloud services enable` fails with an error indist
 from a real misconfiguration. After either event the script waits ten seconds and retries
 the enable **once** before treating it as a failure. The wait is a constant, not an
 environment variable: no knob in this script is settable by anything but its own author.
+
+The one environment variable the script reads is `GOOGLE_CLOUD_PROJECT`, and only as the
+last fallback for *which* project to use, after `--project` and `gcloud config get-value
+project`. Cloud Shell sets it to the project selected when the shell opened; it is
+Google's variable, not ours, and it never changes what the script does, only where.
 
 ## What this does not do
 

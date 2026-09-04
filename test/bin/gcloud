@@ -1,0 +1,213 @@
+#!/usr/bin/env bash
+#
+# A fake gcloud, so setup.sh can be exercised end to end with no Google account.
+# run.sh puts this directory first on PATH. It answers only the subcommands
+# setup.sh actually uses, and shouts (exit 64) at anything else, which is how a
+# newly added gcloud call gets noticed instead of silently passing.
+#
+# Every invocation is appended to $SHIM_STATE/calls.log. Assertions in run.sh
+# count lines in that file: "did the script link a billing account or not" is a
+# question about calls made, not about output printed.
+#
+# Knobs, all read from the environment:
+#
+#   SHIM_STATE            directory for calls.log and remembered state (required)
+#   SHIM_CONFIG_PROJECT   what `config get-value project` returns
+#   SHIM_PROJECTS         newline-separated ids for `projects list`
+#   SHIM_PROJECTS_FAIL    1 makes `projects list` fail
+#   SHIM_CREATE_FAIL      1 makes `projects create` fail
+#   SHIM_CONFIG_SET_FAIL  1 makes `config set project` fail
+#   SHIM_BILLING          True | False | error, for `billing projects describe`
+#   SHIM_ACCOUNTS         newline-separated "billingAccounts/ID<TAB>Display Name"
+#   SHIM_ACCOUNTS_FAIL    1 makes `billing accounts list` fail
+#   SHIM_LINK_FAIL        1 makes `billing projects link` fail
+#   SHIM_ENABLE_FAIL      1 makes every `services enable` fail
+#   SHIM_ENABLE_FAIL_ONCE 1 fails the first `services enable`, then succeeds
+#   SHIM_ENABLE_ERR       billing | permission, which wording the failure uses
+#
+# SHIM_ENABLE_ERR matters more than it looks: setup.sh greps the real gcloud's
+# stderr for the word "billing" to decide whether to offer a billing link, so
+# the two wordings drive opposite branches.
+#
+# State the shim remembers across calls within one case:
+#   config_project    written by `config set project`, read back by get-value
+#   created_project   written by `projects create`
+#   billing_linked    written by `billing projects link`, makes describe say True
+#   enable_tried      first `services enable` attempt, for SHIM_ENABLE_FAIL_ONCE
+#   key_<slug>        a created API key, so a re-run finds it and updates
+#
+set -uo pipefail
+
+STATE="${SHIM_STATE:-/tmp/mapsshim-state}"
+mkdir -p "$STATE"
+echo "gcloud $*" >>"$STATE/calls.log"
+
+args=("$@")
+ALL="$(IFS=" "; echo "${args[*]}")"
+
+slug() { printf '%s' "$1" | tr -c 'A-Za-z0-9' '_'; }
+
+# The real gcloud rejects a malformed invocation; so must this one, or a
+# regression in the flags setup.sh passes would pass here and fail in Cloud
+# Shell. Each mutating handler states what it needs and fails 64 otherwise.
+shim_fail() { echo "shim: $1: $ALL" >&2; exit 64; }
+# has_flag <--flag=> : some argument starts with it and carries a value
+has_flag() {
+  local a
+  for a in "${args[@]}"; do
+    [[ "$a" == "$1"?* ]] && return 0
+  done
+  return 1
+}
+# count_flag <--flag=> : how many arguments start with it
+count_flag() {
+  local a n=0
+  for a in "${args[@]}"; do [[ "$a" == "$1"* ]] && n=$((n + 1)); done
+  echo "$n"
+}
+need_flag() { has_flag "$1" || shim_fail "missing $1<value>"; }
+# positional <index> : the argument there exists and is not a flag
+positional() { [[ -n "${args[$1]:-}" && "${args[$1]}" != -* ]] || shim_fail "missing positional argument $1"; }
+
+enable_err() {
+  case "${SHIM_ENABLE_ERR:-billing}" in
+    billing)
+      echo "ERROR: (gcloud.services.enable) FAILED_PRECONDITION: Billing must be enabled for activation of service" >&2
+      ;;
+    *)
+      echo "ERROR: (gcloud.services.enable) PERMISSION_DENIED: caller lacks serviceusage.services.enable" >&2
+      ;;
+  esac
+}
+
+case "$ALL" in
+  "config get-value project"*)
+    if [ -f "$STATE/config_project" ]; then cat "$STATE/config_project"; exit 0; fi
+    printf '%s\n' "${SHIM_CONFIG_PROJECT-}"
+    exit 0
+    ;;
+
+  "config set project"*)
+    positional 3
+    if [ "${SHIM_CONFIG_SET_FAIL:-0}" = "1" ]; then
+      echo "ERROR: (gcloud.config.set) failed to set project" >&2
+      exit 1
+    fi
+    printf '%s\n' "${args[3]:-}" >"$STATE/config_project"
+    exit 0
+    ;;
+
+  "projects list"*)
+    if [ "${SHIM_PROJECTS_FAIL:-0}" = "1" ]; then
+      echo "ERROR: (gcloud.projects.list) reauthentication required" >&2
+      exit 1
+    fi
+    printf '%s' "${SHIM_PROJECTS-}"
+    [ -n "${SHIM_PROJECTS-}" ] && printf '\n'
+    exit 0
+    ;;
+
+  "projects create"*)
+    positional 2
+    need_flag --name=
+    if [ "${SHIM_CREATE_FAIL:-0}" = "1" ]; then
+      echo "ERROR: (gcloud.projects.create) FAILED_PRECONDITION: parent required" >&2
+      exit 1
+    fi
+    printf '%s\n' "${args[2]:-}" >"$STATE/created_project"
+    exit 0
+    ;;
+
+  "beta billing accounts list"*)
+    if [ "${SHIM_ACCOUNTS_FAIL:-0}" = "1" ]; then
+      echo "ERROR: (gcloud) PERMISSION_DENIED" >&2
+      exit 1
+    fi
+    [ -n "${SHIM_ACCOUNTS-}" ] && printf '%s\n' "${SHIM_ACCOUNTS}"
+    exit 0
+    ;;
+
+  "beta billing projects link"*)
+    positional 4
+    need_flag --billing-account=
+    if [ "${SHIM_LINK_FAIL:-0}" = "1" ]; then
+      echo "ERROR: (gcloud) PERMISSION_DENIED: billing.resourceAssociations.create" >&2
+      exit 1
+    fi
+    echo "linked" >"$STATE/billing_linked"
+    exit 0
+    ;;
+
+  "beta billing projects describe"*)
+    # A project this run has just linked reads back as billed, so the
+    # link-then-continue path behaves like the real thing.
+    if [ -f "$STATE/billing_linked" ]; then echo "True"; exit 0; fi
+    case "${SHIM_BILLING:-True}" in
+      error) echo "ERROR: (gcloud) PERMISSION_DENIED" >&2; exit 1 ;;
+      *)     printf '%s\n' "${SHIM_BILLING:-True}"; exit 0 ;;
+    esac
+    ;;
+
+  "services enable"*)
+    positional 2
+    need_flag --project=
+    if [ "${SHIM_ENABLE_FAIL:-0}" = "1" ]; then enable_err; exit 1; fi
+    if [ "${SHIM_ENABLE_FAIL_ONCE:-0}" = "1" ] && [ ! -f "$STATE/enable_tried" ]; then
+      touch "$STATE/enable_tried"
+      enable_err
+      exit 1
+    fi
+    exit 0
+    ;;
+
+  "services api-keys list"*)
+    name=""
+    for a in "${args[@]}"; do
+      case "$a" in --filter=displayName=*) name="${a#--filter=displayName=}" ;; esac
+    done
+    name="${name%\"}"; name="${name#\"}"
+    f="$STATE/key_$(slug "$name")"
+    [ -f "$f" ] && cat "$f"
+    exit 0
+    ;;
+
+  "services api-keys create"*)
+    need_flag --project=
+    need_flag --display-name=
+    need_flag --api-target=service=
+    # One application restriction per key, and exactly one: Google refuses a
+    # key that carries both, and a key with neither is the bug this whole
+    # repository exists to avoid.
+    ips="$(count_flag --allowed-ips=)"; refs="$(count_flag --allowed-referrers=)"
+    [ "$((ips + refs))" = "1" ] || shim_fail "want exactly one of --allowed-ips= / --allowed-referrers=, got ${ips}+${refs}"
+    if [ "$ips" = "1" ]; then need_flag --allowed-ips=; else need_flag --allowed-referrers=; fi
+    name=""
+    for a in "${args[@]}"; do
+      case "$a" in --display-name=*) name="${a#--display-name=}" ;; esac
+    done
+    echo "projects/1234/locations/global/keys/$(slug "$name")" >"$STATE/key_$(slug "$name")"
+    exit 0
+    ;;
+
+  "services api-keys update"*)
+    positional 3
+    need_flag --project=
+    need_flag --api-target=service=
+    ips="$(count_flag --allowed-ips=)"; refs="$(count_flag --allowed-referrers=)"
+    [ "$((ips + refs))" = "1" ] || shim_fail "want exactly one of --allowed-ips= / --allowed-referrers=, got ${ips}+${refs}"
+    exit 0
+    ;;
+
+  "services api-keys get-key-string"*)
+    positional 3
+    need_flag --project=
+    case "${args[3]:-}" in
+      *Routes*) echo "AIzaSyFAKEserverKEY0000000000000000000" ;;
+      *)        echo "AIzaSyFAKEbrowserKEY000000000000000000" ;;
+    esac
+    exit 0
+    ;;
+esac
+
+echo "shim: unhandled gcloud invocation: $ALL" >&2
+exit 64
