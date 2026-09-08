@@ -5,7 +5,7 @@
 # Two keys are created, because a Google API key carries exactly one application
 # restriction type. A single key cannot serve both a browser and a server:
 #
-#   PingTab Routes (server)   IP-restricted         Routes API
+#   PingTab Routes (server)   IP-restricted         Routes API, Places (New)
 #   PingTab Web (browser)     referrer-restricted   Maps JS, Static Maps, Places (New)
 #
 # Runs as whoever is authenticated with gcloud. Designed for Google Cloud Shell,
@@ -27,7 +27,11 @@ set -euo pipefail
 SERVER_NAME="PingTab Routes (server)"
 BROWSER_NAME="PingTab Web (browser)"
 
-SERVER_APIS=(routes.googleapis.com)
+# Places (New) is on the server key as well as the browser key since 2026-09-08:
+# the booking site's airport address lookup is proxied through the PingTab
+# backend rather than calling Google from the guest's browser, so the
+# operator's server key is the one that pays for it.
+SERVER_APIS=(routes.googleapis.com places.googleapis.com)
 BROWSER_APIS=(maps-backend.googleapis.com static-maps-backend.googleapis.com places.googleapis.com)
 
 ALLOWED_IPS=""

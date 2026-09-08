@@ -177,7 +177,7 @@ restrictions are set.
 
 | Key | Application restriction | API restriction |
 | --- | --- | --- |
-| `PingTab Routes (server)` | PingTab backend IPs | `routes.googleapis.com` |
+| `PingTab Routes (server)` | PingTab backend IPs | `routes.googleapis.com` (Routes), `places.googleapis.com` (Places New, for the booking site's address lookup, which the PingTab backend proxies) |
 | `PingTab Web (browser)` | customer website referrers | `maps-backend.googleapis.com` (Maps JS), `static-maps-backend.googleapis.com` (Maps Static), `places.googleapis.com` (Places New) |
 
 Note the service names: Maps JavaScript API is `maps-backend`, Maps Static API is
@@ -265,7 +265,9 @@ has no billing account fails at the API-enable step instead, and that is where t
 offer gets made a second time for exactly this reason.
 
 It also does not verify the keys. The backend verifies the **server** key with one Routes
-call as it stores it, and reports Google's sanitised message back through the POST
+call as it stores it (only Routes: a server key with Places (New) left off passes that
+check and the booking site's address lookup then falls back to PingTab's key, so leave
+the API restriction as the script sets it), and reports Google's sanitised message back through the POST
 response, which the script prints in plain words. The **browser** key cannot be verified
 from a server at all: a correctly referrer-restricted key is supposed to fail there. It
 is stored, and the settings page offers a button that tests it from the page itself,
