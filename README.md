@@ -27,11 +27,13 @@ No Google account needed, about 35 seconds, 57 cases. Run it before pushing: a p
 
 The customer never handles an `AIza…` string. Three steps, one paste:
 
-1. On the Maps settings screen in the dashboard they click **Open Google Cloud Shell**.
-   The click also mints a single-use setup code in the background, and the screen shows
-   the command to paste, with a copy button.
-2. Cloud Shell opens on this repo with `tutorial.md` in the side panel. They pick a
-   project and paste one line:
+1. On the Maps settings screen in the dashboard they click **Get my command**. That
+   mints a single-use setup code and shows the command to paste, with a copy button.
+   The command comes before the Cloud Shell link on purpose: an earlier version minted
+   on the click that opened Cloud Shell, and the command then appeared on a tab the
+   operator had just left.
+2. They click **Open Google Cloud Shell**. It opens on this repo with `tutorial.md` in
+   the side panel. They pick a project and paste one line:
 
    ```
    ./setup.sh --code 7F3K-92QX

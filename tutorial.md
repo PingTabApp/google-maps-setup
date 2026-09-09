@@ -21,10 +21,12 @@ sort that out and asks you first. Nothing is created or billed without a yes fro
 
 ## Paste the command from PingTab
 
-Go back to the PingTab settings screen and copy the command it shows you. It looks like
-`./setup.sh --code XXXX-XXXX`, with your own code in place of the Xs.
+Paste the command you copied from the PingTab settings screen into the terminal below
+this panel and press Enter. It looks like `./setup.sh --code XXXX-XXXX`, with your own
+code in place of the Xs.
 
-Paste it into the terminal below this panel and press Enter.
+Did not copy it? Switch back to the PingTab tab: the command is shown under step 1,
+with a Copy button next to it.
 
 It will:
 
