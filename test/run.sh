@@ -421,6 +421,7 @@ if (( HAVE_SCRIPT == 0 )); then
            "prompt billing many accounts, pick then decline" \
            "prompt billing pick 02 means 2" "prompt billing pick out of range" \
            "prompt billing link fails" "prompt enable retry after a new project" \
+           "prompt many projects, pick one" "prompt many projects, stop" \
            "prompt enable failure names billing" \
            "prompt enable failure without billing" \
            "dry run creates nothing with prompts"; do
@@ -501,6 +502,29 @@ if wanted "prompt billing one account, no"; then
   expect_calls 0 "billing projects link"
   expect_out "No script can create a billing account for you"
   check "prompt billing one account, no"
+fi
+
+if wanted "prompt many projects, pick one"; then
+  CASE_ENV=(SHIM_CONFIG_PROJECT= "SHIM_PROJECTS=$(printf 'a-1\tAlpha Cabs\nb-2\tBeta Tours')" SHIM_BILLING=True)
+  CASE_ANSWERS='2\n'
+  run_case "prompt many projects, pick one" "${CODE[@]}"
+  expect_status 0
+  expect_out "1  Alpha Cabs (a-1)"
+  expect_out "Project: b-2"
+  expect_calls 1 "config set project b-2"
+  expect_calls 1 "services enable .*--project=b-2"
+  check "prompt many projects, pick one"
+fi
+
+if wanted "prompt many projects, stop"; then
+  CASE_ENV=(SHIM_CONFIG_PROJECT= "SHIM_PROJECTS=$(printf 'a-1\tAlpha Cabs\nb-2\tBeta Tours')" SHIM_BILLING=True)
+  CASE_ANSWERS='\n'
+  run_case "prompt many projects, stop" "${CODE[@]}"
+  expect_status 1
+  expect_out "No project chosen."
+  expect_calls 0 "config set project"
+  expect_calls 0 "services enable"
+  check "prompt many projects, stop"
 fi
 
 if wanted "prompt billing many accounts, pick and confirm"; then

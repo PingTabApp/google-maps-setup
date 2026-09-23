@@ -127,7 +127,7 @@ Usage: ./setup.sh --code <XXXX-XXXX> [--api <URL>] [--project <PROJECT_ID>]
   --api                PingTab API address. Defaults to ${API_BASE}. PingTab
                        shows this on the screen when it is anything else.
   --project            Google Cloud project to create the keys in. Defaults to
-                       the project chosen in the panel above the terminal.
+                       the gcloud project. With none set, the script asks.
 
   --allowed-ips        Manual mode. Creates the server key, callable only from
                        these PingTab addresses, and prints it.
@@ -324,9 +324,12 @@ fi
 
 # ----------------------------------------------------------------- project ---
 
-# Order matters. The project picker in the panel writes to the gcloud config,
-# while GOOGLE_CLOUD_PROJECT is fixed when the shell starts. Reading the config
-# first is what makes a tab opened before the pick still do the right thing.
+# The project picker in the tutorial panel does NOT write to the gcloud config:
+# it only fills in the tutorial's own text. So a Cloud Shell opened from the
+# PingTab link usually has no project set, and anyone with more than one
+# project reaches the picker below. Read the config before GOOGLE_CLOUD_PROJECT,
+# which is fixed when the shell starts and goes stale after a `gcloud config
+# set project`.
 if [[ -z "$PROJECT" ]]; then
   PROJECT="$(gcloud config get-value project 2>/dev/null || true)"
 fi
@@ -341,14 +344,15 @@ if [[ -z "$PROJECT" || "$PROJECT" == "(unset)" ]]; then
   # project, the other must never create anything. Keep the status separate.
   PROJECT_LIST=""
   PROJECT_LIST_RC=0
-  PROJECT_LIST="$(gcloud projects list --format='value(projectId)' 2>/dev/null)" || PROJECT_LIST_RC=$?
+  # One line per project: id, a tab, then the display name.
+  PROJECT_LIST="$(gcloud projects list --format='value(projectId,name)' 2>/dev/null)" || PROJECT_LIST_RC=$?
   if [[ "$PROJECT_LIST_RC" != "0" ]]; then
     die "Could not read your Google Cloud projects. Check you are signed in, then paste the command again."
   fi
   PROJECT_COUNT="$(printf '%s' "$PROJECT_LIST" | grep -c . || true)"
 
   if [[ "$PROJECT_COUNT" == "1" ]]; then
-    PROJECT="$(printf '%s' "$PROJECT_LIST" | head -n1)"
+    PROJECT="$(printf '%s' "$PROJECT_LIST" | head -n1 | cut -f1)"
     info "Using your only Google Cloud project: ${PROJECT}"
   elif [[ "$PROJECT_COUNT" == "0" ]]; then
     if ! is_interactive; then
@@ -422,16 +426,47 @@ Run this, then paste the command again:
 SELECTFAIL
       die "Could not select the new project."
     fi
+  elif is_interactive; then
+    echo
+    echo "You have more than one Google Cloud project. Which one should the keys go in?"
+    echo
+    n=0
+    while IFS=$'\t' read -r pid pname; do
+      [[ -n "$pid" ]] || continue
+      n=$((n + 1))
+      if [[ -n "$pname" && "$pname" != "$pid" ]]; then
+        printf '  %d  %s (%s)\n' "$n" "$pname" "$pid"
+      else
+        printf '  %d  %s\n' "$n" "$pid"
+      fi
+    done <<<"$PROJECT_LIST"
+    echo
+    printf 'Enter a number, or press Enter to stop. '
+    read -r choice || choice=""
+    echo
+    # Same guard as the billing picker: at most three digits, read as base 10.
+    [[ "$choice" =~ ^[0-9]{1,3}$ ]] || die "No project chosen."
+    choice=$((10#$choice))
+    [[ "$choice" -ge 1 && "$choice" -le "$n" ]] || die "No project chosen."
+    PROJECT="$(printf '%s' "$PROJECT_LIST" | grep . | sed -n "${choice}p" | cut -f1)"
+
+    # Remember the pick, so pasting the command again (after fixing billing,
+    # say) goes straight to this project. Only a convenience: this run uses
+    # the pick either way.
+    run_or_print gcloud config set project "$PROJECT" 2>/dev/null \
+      || warn "Could not save ${PROJECT} as your default project. Carrying on with it anyway."
   else
     cat >&2 <<MANYPROJECTS
 
-You have more than one Google Cloud project. Pick the one to use in the panel
-above this terminal, then paste the command again.
+You have more than one Google Cloud project. Run this again in a terminal and it
+will ask which one to use, or add --project to the command:
+
+  ./setup.sh ... --project YOUR_PROJECT_ID
 
 Your projects:
 
 MANYPROJECTS
-    printf '%s\n' "$PROJECT_LIST" | sed 's/^/  /' >&2
+    printf '%s\n' "$PROJECT_LIST" | cut -f1 | sed 's/^/  /' >&2
     echo >&2
     die "Choose a project first."
   fi

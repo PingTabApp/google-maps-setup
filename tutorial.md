@@ -12,7 +12,8 @@ in your own account.
 
 ## Choose your Google Cloud project
 
-Pick the project the keys should live in, or create a new one here.
+The script asks which project to put the keys in when you have more than one, so there
+is nothing to pick here. If you want a new project for this, create it below first.
 
 <walkthrough-project-setup></walkthrough-project-setup>
 

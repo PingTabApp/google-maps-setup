@@ -20,7 +20,7 @@ project, billed to their **own** account, and hand just those keys back to PingT
 ./test/run.sh
 ```
 
-No Google account needed, about 35 seconds, 57 cases. Run it before pushing: a push to
+No Google account needed, about 35 seconds, 59 cases. Run it before pushing: a push to
 `main` here is a release.
 
 ## The flow
